@@ -1,0 +1,16 @@
+_BASE_: "Base-RCNN-VoVNet-FPN.yaml"
+INPUT:
+  NUM_IMAGES_3DCE: 3
+MODEL:
+  USE_3D_FUSION: True
+  WEIGHTS: "tests/vovnet/model_final.pth"
+  MASK_ON: True
+  VOVNET:
+    CONV_BODY : "V-57-eSE"
+  BACKBONE:
+    IN_CHANNELS: 256
+    OUT_CHANNELS: 256
+SOLVER:
+  STEPS: (60000, 80000)
+  MAX_ITER: 90000
+OUTPUT_DIR: "MRCN-V2-57-1x-3dce"
