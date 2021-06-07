@@ -7,8 +7,6 @@
 - OpenCV is optional but needed by demo and visualization
 
 
-
-
 ### Build Detectron2 from Source
 
 gcc & g++ ≥ 5.4 are required. [ninja](https://ninja-build.org/) is optional but recommended for faster build.
