@@ -39,14 +39,14 @@ class MePredictor:
         checkpoint = torch.load(cfg.MODEL.WEIGHTS,map_location=lambda storage, loc: storage.cuda(gpu_id))# map_location=torch.device("cpu"))
         self.model.load_state_dict(checkpoint['model'], strict=False)
 
-    def predict(self, original_image, image_size):
+    def predict(self, original_image):
         with torch.no_grad():
             inputs = []
             for i in range(len(original_image)):
                 image = original_image[i]
                 height, width = image.shape[-2:]
                 inputs.append({"image": image, "height": height, "width": width})
-            predictions = self.model(inputs, image_size)
+            predictions = self.model(inputs)
             return predictions
 
 class MSDetector(object):
@@ -70,7 +70,7 @@ class MSDetector(object):
         cfg.freeze()
         return cfg
 
-    def inference(self, image_tensor, image_size):
+    def inference(self, image_tensor):
         """
         run detector on all/selected slices of a CT
         :param ct: DxHxW, already on target device, dtype should be torch.uint8
@@ -92,7 +92,7 @@ class MSDetector(object):
             #predictions = self.model(inputs, image_size)
             #import pdb;pdb.set_trace()
             s1 = time.time()
-            predictions = self.pred.predict(batch, image_size)
+            predictions = self.pred.predict(batch)
             torch.cuda.synchronize()
             print('pre_time:',time.time()-s1)
 
@@ -101,5 +101,5 @@ spacing = (0.53125, 0.53125, 1.258)
 image_tensors = torch.tensor(np.load('tests/vovnet/image.npz')['data'])
 image_size = [512, 512]
 s = time.time()
-dets_ct = prop_detector.inference(image_tensors, image_size)
+dets_ct = prop_detector.inference(image_tensors)
 print('inference time: ', time.time() - s)

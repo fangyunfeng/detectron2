@@ -1,13 +1,13 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import logging
 import numpy as np
-from typing import Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 import torch
 from torch import nn
 
 from detectron2.config import configurable
 from detectron2.data.detection_utils import convert_image_to_rgb
-from detectron2.structures import ImageList
+from detectron2.structures import ImageList, Instances
 from detectron2.utils.events import get_event_storage
 from detectron2.utils.logger import log_first_n
 
@@ -67,8 +67,8 @@ class GeneralizedRCNN(nn.Module):
         if vis_period > 0:
             assert input_format is not None, "input_format is required for visualization!"
 
-        self.register_buffer("pixel_mean", torch.Tensor(pixel_mean).view(-1, 1, 1))
-        self.register_buffer("pixel_std", torch.Tensor(pixel_std).view(-1, 1, 1))
+        self.register_buffer("pixel_mean", torch.tensor(pixel_mean).view(-1, 1, 1), False)
+        self.register_buffer("pixel_std", torch.tensor(pixel_std).view(-1, 1, 1), False)
         assert (
             self.pixel_mean.shape == self.pixel_std.shape
         ), f"{self.pixel_mean} and {self.pixel_std} have different shapes!"
@@ -136,7 +136,7 @@ class GeneralizedRCNN(nn.Module):
             storage.put_image(vis_name, vis_img)
             break  # only visualize one image in a batch
 
-    def forward(self, batched_inputs, image_size):
+    def forward(self, batched_inputs: List[Dict[str, torch.Tensor]]):
         """
         Args:
             batched_inputs: a list, batched outputs of :class:`DatasetMapper` .
@@ -160,7 +160,7 @@ class GeneralizedRCNN(nn.Module):
                 "pred_boxes", "pred_classes", "scores", "pred_masks", "pred_keypoints"
         """
         if not self.training:
-            return self.inference(batched_inputs, image_size)
+            return self.inference(batched_inputs)
 
         images = self.preprocess_image(batched_inputs)
         if "instances" in batched_inputs[0]:
@@ -177,7 +177,7 @@ class GeneralizedRCNN(nn.Module):
         if self.use_3d_fusion:
             features, images = self.feature_fuse(features, images)
 
-        if self.proposal_generator:
+        if self.proposal_generator is not None:
             proposals, proposal_losses = self.proposal_generator(images, features, gt_instances)
         else:
             assert "proposals" in batched_inputs[0]
@@ -195,7 +195,12 @@ class GeneralizedRCNN(nn.Module):
         losses.update(proposal_losses)
         return losses
 
-    def inference(self, batched_inputs, image_size, detected_instances=None, do_postprocess=True):
+    def inference(
+        self,
+        batched_inputs: List[Dict[str, torch.Tensor]],
+        detected_instances: Optional[List[Instances]] = None,
+        do_postprocess: bool = True,
+    ):
         """
         Run inference on the given inputs.
 
@@ -226,7 +231,7 @@ class GeneralizedRCNN(nn.Module):
             features, images = self.feature_fuse(features, images)
 
         if detected_instances is None:
-            if self.proposal_generator:
+            if self.proposal_generator is not None:
                 proposals, _ = self.proposal_generator(images, features, None)
             else:
                 assert "proposals" in batched_inputs[0]
@@ -238,11 +243,12 @@ class GeneralizedRCNN(nn.Module):
             results = self.roi_heads.forward_with_given_boxes(features, detected_instances)
 
         if do_postprocess:
-            return GeneralizedRCNN._postprocess(results, image_size)
+            assert not torch.jit.is_scripting(), "Scripting is not supported for postprocess."
+            return GeneralizedRCNN._postprocess(results, batched_inputs, images.image_sizes)
         else:
             return results
 
-    def preprocess_image(self, batched_inputs):
+    def preprocess_image(self, batched_inputs: List[Dict[str, torch.Tensor]]):
         """
         Normalize, pad and batch the input images.
         """
@@ -252,14 +258,18 @@ class GeneralizedRCNN(nn.Module):
         return images
 
     @staticmethod
-    def _postprocess(instances, image_size):
+    def _postprocess(instances, batched_inputs: List[Dict[str, torch.Tensor]], image_sizes):
         """
         Rescale the output instances to the target size.
         """
         # note: private function; subject to changes
         processed_results = []
-        for results_per_image in instances:
-            r = detector_postprocess(results_per_image, image_size[0], image_size[1])
+        for results_per_image, input_per_image, image_size in zip(
+            instances, batched_inputs, image_sizes
+        ):
+            height = input_per_image.get("height", image_size[0])
+            width = input_per_image.get("width", image_size[1])
+            r = detector_postprocess(results_per_image, height, width)
             processed_results.append({"instances": r})
         return processed_results
 
@@ -269,14 +279,37 @@ class ProposalNetwork(nn.Module):
     """
     A meta architecture that only predicts object proposals.
     """
-
-    def __init__(self, cfg):
+    @configurable
+    def __init__(
+        self,
+        *,
+        backbone: Backbone,
+        proposal_generator: nn.Module,
+        pixel_mean: Tuple[float],
+        pixel_std: Tuple[float],
+    ):
+        """
+        Args:
+            backbone: a backbone module, must follow detectron2's backbone interface
+            proposal_generator: a module that generates proposals using backbone features
+            pixel_mean, pixel_std: list or tuple with #channels element, representing
+                the per-channel mean and std to be used to normalize the input image
+        """
         super().__init__()
-        self.backbone = build_backbone(cfg)
-        self.proposal_generator = build_proposal_generator(cfg, self.backbone.output_shape())
+        self.backbone = backbone
+        self.proposal_generator = proposal_generator
+        self.register_buffer("pixel_mean", torch.tensor(pixel_mean).view(-1, 1, 1), False)
+        self.register_buffer("pixel_std", torch.tensor(pixel_std).view(-1, 1, 1), False)
 
-        self.register_buffer("pixel_mean", torch.Tensor(cfg.MODEL.PIXEL_MEAN).view(-1, 1, 1))
-        self.register_buffer("pixel_std", torch.Tensor(cfg.MODEL.PIXEL_STD).view(-1, 1, 1))
+    @classmethod
+    def from_config(cls, cfg):
+        backbone = build_backbone(cfg)
+        return {
+            "backbone": backbone,
+            "proposal_generator": build_proposal_generator(cfg, backbone.output_shape()),
+            "pixel_mean": cfg.MODEL.PIXEL_MEAN,
+            "pixel_std": cfg.MODEL.PIXEL_STD,
+        }
 
     @property
     def device(self):
