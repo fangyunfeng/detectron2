@@ -1,4 +1,4 @@
-# Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import logging
 import numpy as np
 from typing import Dict, List, Optional, Tuple
@@ -16,6 +16,7 @@ from ..postprocessing import detector_postprocess
 from ..proposal_generator import build_proposal_generator
 from ..roi_heads import build_roi_heads
 from .build import META_ARCH_REGISTRY
+from .feature_fusion_3dce import FeatureFusion3dce
 
 __all__ = ["GeneralizedRCNN", "ProposalNetwork"]
 
@@ -40,14 +41,19 @@ class GeneralizedRCNN(nn.Module):
         pixel_std: Tuple[float],
         input_format: Optional[str] = None,
         vis_period: int = 0,
+        feature_fuse: FeatureFusion3dce,
+        use_3d_fusion: bool = False,
     ):
         """
+        NOTE: this interface is experimental.
+
         Args:
             backbone: a backbone module, must follow detectron2's backbone interface
             proposal_generator: a module that generates proposals using backbone features
             roi_heads: a ROI head that performs per-region computation
-            pixel_mean, pixel_std: list or tuple with #channels element, representing
-                the per-channel mean and std to be used to normalize the input image
+            pixel_mean, pixel_std: list or tuple with #channels element,
+                representing the per-channel mean and std to be used to normalize
+                the input image
             input_format: describe the meaning of channels of input. Needed by visualization
             vis_period: the period to run visualization. Set to 0 to disable.
         """
@@ -67,9 +73,16 @@ class GeneralizedRCNN(nn.Module):
             self.pixel_mean.shape == self.pixel_std.shape
         ), f"{self.pixel_mean} and {self.pixel_std} have different shapes!"
 
+        self.use_3d_fusion = use_3d_fusion
+        if self.use_3d_fusion:
+            # the original 3DCE fuse last feature maps
+            self.feature_fuse = feature_fuse
+
     @classmethod
     def from_config(cls, cfg):
         backbone = build_backbone(cfg)
+        feature_fuse = FeatureFusion3dce(cfg)
+        
         return {
             "backbone": backbone,
             "proposal_generator": build_proposal_generator(cfg, backbone.output_shape()),
@@ -78,6 +91,8 @@ class GeneralizedRCNN(nn.Module):
             "vis_period": cfg.VIS_PERIOD,
             "pixel_mean": cfg.MODEL.PIXEL_MEAN,
             "pixel_std": cfg.MODEL.PIXEL_STD,
+            "feature_fuse": feature_fuse,
+            "use_3d_fusion": cfg.MODEL.USE_3D_FUSION
         }
 
     @property
@@ -117,7 +132,6 @@ class ProposalNetwork(nn.Module):
     """
     A meta architecture that only predicts object proposals.
     """
-
     @configurable
     def __init__(
         self,
