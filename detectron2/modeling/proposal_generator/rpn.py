@@ -430,7 +430,7 @@ class RPN(nn.Module):
 
     def forward(
         self,
-        images: ImageList,
+        image_sizes: List[Tuple[int, int]],
         features: Dict[str, torch.Tensor],
         gt_instances: Optional[List[Instances]] = None,
     ):
@@ -475,7 +475,7 @@ class RPN(nn.Module):
         else:
             losses = {}
         proposals = self.predict_proposals(
-            anchors, pred_objectness_logits, pred_anchor_deltas, images.image_sizes
+            anchors, pred_objectness_logits, pred_anchor_deltas, image_sizes
         )
         return proposals, losses
 

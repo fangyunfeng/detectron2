@@ -39,7 +39,7 @@ def build_roi_heads(cfg, input_shape):
     """
     Build ROIHeads defined by `cfg.MODEL.ROI_HEADS.NAME`.
     """
-    name = cfg.MODEL.ROI_HEADS.NAME
+    name = cfg.MODEL.ROI_HEADS.NAME#"StandardROIHeads"
     return ROI_HEADS_REGISTRY.get(name)(cfg, input_shape)
 
 
@@ -713,7 +713,6 @@ class StandardROIHeads(ROIHeads):
 
     def forward(
         self,
-        images: ImageList,
         features: Dict[str, torch.Tensor],
         proposals: List[Instances],
         targets: Optional[List[Instances]] = None,
@@ -721,7 +720,6 @@ class StandardROIHeads(ROIHeads):
         """
         See :class:`ROIHeads.forward`.
         """
-        del images
         if self.training:
             assert targets, "'targets' argument is required during training"
             proposals = self.label_and_sample_proposals(proposals, targets)
